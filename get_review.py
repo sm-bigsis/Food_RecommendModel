@@ -22,9 +22,12 @@ driver_path = '/opt/homebrew/bin/chromedriver'  # chromedriver 경로
 service = Service(driver_path)
 driver = webdriver.Chrome(service=service, options=options)
 
-def scroll_and_collect_reviews(driver, scroll_pause_time=2):
+def scroll_and_collect_reviews(driver, max_reviews=50, scroll_pause_time=2):
     popup = driver.find_element(By.CLASS_NAME, 'review-dialog-list')
     last_height = driver.execute_script("return arguments[0].scrollHeight", popup)
+
+    collected_reviews = []
+    review_count = 0
 
     while True:
         # "more" 버튼 클릭
@@ -47,55 +50,58 @@ def scroll_and_collect_reviews(driver, scroll_pause_time=2):
             break
         last_height = new_height
 
-    # "display:none" 속성을 가진 요소들을 보이게 만들기
-    elements_to_show = driver.find_elements(By.XPATH, '//*[@style="display:none"]')
-    for elem in elements_to_show:
-        driver.execute_script("arguments[0].setAttribute('style', 'display:block;');", elem)
+        # "display:none" 속성을 가진 요소들을 보이게 만들기
+        elements_to_show = driver.find_elements(By.XPATH, '//*[@style="display:none"]')
+        for elem in elements_to_show:
+            driver.execute_script("arguments[0].setAttribute('style', 'display:block;');", elem)
 
-    # 리뷰 데이터 수집
-    review_data = []
-    reviews = driver.find_elements(By.CLASS_NAME, 'WMbnJf')
-    for idx, review in enumerate(reviews[:50], start=1):
-        try:
-            review_text = review.find_element(By.CLASS_NAME, 'review-full-text').text
-            review_id = review.find_element(By.CLASS_NAME, 'TSUbDb').text
+        # 리뷰 데이터 수집
+        reviews = driver.find_elements(By.CLASS_NAME, 'WMbnJf')
+        for review in reviews:
+            try:
+                review_text = review.find_element(By.CLASS_NAME, 'review-full-text').text
+                review_id = review.find_element(By.CLASS_NAME, 'TSUbDb').text
 
-            # 사진 URL 수집 및 저장
-            photo_urls = []
-            photos = review.find_elements(By.CLASS_NAME, 'JrO5Xe')
-            for photo_idx, photo in enumerate(photos):
-                photo_url = photo.get_attribute('src')
-                photo_urls.append(photo_url)
+                # 사진 URL 수집 및 저장
+                photo_urls = []
+                photos = review.find_elements(By.CLASS_NAME, 'JrO5Xe')
+                for photo_idx, photo in enumerate(photos):
+                    photo_url = photo.get_attribute('src')
+                    photo_urls.append(photo_url)
 
-                # 사진 저장
-                response = requests.get(photo_url)
-                if response.status_code == 200:
-                    folder_name = '/Users/shinseohyunn/Desktop/bigsis/reviews'
+                    # 사진 저장 (각 가게별 폴더 생성)
+                    store_name = driver.title.split(' - ')[0].strip()
+                    folder_name = f'/Users/shinseohyunn/Desktop/bigsis/reviews/{store_name}'
                     if not os.path.exists(folder_name):
                         os.makedirs(folder_name)
 
                     photo_filename = f'{folder_name}/{review_id}_photo_{photo_idx+1}.jpg'
                     with open(photo_filename, 'wb') as f:
-                        f.write(response.content)
+                        f.write(requests.get(photo_url).content)
 
-            # 리뷰 데이터 저장
-            review_data.append({
-                'Review ID': review_id,
-                'Review Text': review_text,
-                'Photo URLs': photo_urls
-            })
+                # 리뷰 데이터 저장
+                collected_reviews.append({
+                    'Store Name': store_name,
+                    'Review ID': review_id,
+                    'Review Text': review_text,
+                    'Photo URLs': photo_urls
+                })
 
-            # 수집된 리뷰 데이터 로그 출력
-            print(f'Review {idx} collected.')
+                review_count += 1
+                print(f'Review {review_count} collected.')
 
-        except Exception as e:
-            # 에러 발생 시 스크린샷 저장
-            error_screenshot_path = f'/Users/shinseohyunn/Desktop/bigsis/reviews/error_{driver.current_url.replace("https://www.google.com/search?", "").replace("/", "_")}.png'
-            driver.save_screenshot(error_screenshot_path)
-            print(f'Error processing review {idx}: {str(e)}')
-            print(f'Screenshot saved: {error_screenshot_path}')
+                # 리뷰 개수가 max_reviews에 도달하면 종료
+                if review_count >= max_reviews:
+                    return collected_reviews
 
-    return review_data
+            except Exception as e:
+                # 에러 발생 시 스크린샷 저장
+                error_screenshot_path = f'/Users/shinseohyunn/Desktop/bigsis/reviews/error_{driver.current_url.replace("https://www.google.com/search?", "").replace("/", "_")}.png'
+                driver.save_screenshot(error_screenshot_path)
+                print(f'Error processing review: {str(e)}')
+                print(f'Screenshot saved: {error_screenshot_path}')
+
+    return collected_reviews
 
 
 review_lst = [
@@ -108,7 +114,7 @@ for store_url in review_lst:
         time.sleep(10)  # 페이지가 로드될 때까지 대기
 
         # 스크롤 및 리뷰 수집
-        review_data = scroll_and_collect_reviews(driver)
+        review_data = scroll_and_collect_reviews(driver, max_reviews=100)
 
         # 데이터 프레임 생성 및 CSV 저장
         df = pd.DataFrame(review_data)
